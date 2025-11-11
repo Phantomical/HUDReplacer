@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.Rendering;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
@@ -38,16 +39,56 @@ namespace HUDReplacer
 
 			public SizedReplacementInfo GetMatchingReplacement(Texture2D tex)
 			{
+				if (replacements.Count == 0)
+					return null;
+
+				var sized = GetSizedReplacement(tex);
+				var unsized = GetUnsizedReplacement();
+
+				if (sized is not null)
+				{
+					// If priorities are equal then prefer the sized texture
+					if (unsized.priority <= sized.priority)
+						return sized;
+				}
+
+				return unsized;
+			}
+
+			SizedReplacementInfo GetSizedReplacement(Texture2D tex)
+			{
 				foreach (var info in replacements)
 				{
-					if (info.width == 0 && info.height == 0)
-						return info;
-
 					if (info.width == tex.width && info.height == tex.height)
 						return info;
 				}
 
 				return null;
+			}
+
+			SizedReplacementInfo GetUnsizedReplacement()
+			{
+				SizedReplacementInfo found = replacements[0];
+
+				foreach (var info in replacements)
+				{
+					if (info.priority < found.priority)
+						break;
+					
+					// Prefer textures without a specific size if we have one
+					// available.
+					if (info.width == 0 && info.height == 0)
+					{
+						found = info;
+						break;
+					}
+
+					// Otherwise use the biggest texture we have
+					if (info.width > found.width && info.height > found.height)
+						found = info;
+				}
+
+				return found;
 			}
 		}
 
@@ -225,12 +266,17 @@ namespace HUDReplacer
 					continue;
 				}
 
+				var basePath = KSPUtil.ApplicationRootPath;
 				Debug.Log($"HUDReplacer: path {filePath} - priority: {priority}");
 				string[] files = Directory.GetFiles(KSPUtil.ApplicationRootPath + filePath, "*.png");
 
 				foreach (string filename in files)
 				{
-					Debug.Log($"HUDReplacer: Found file {filename}");
+					var relpath = filename;
+					if (relpath.StartsWith(basePath))
+						relpath = relpath.Substring(basePath.Length);
+
+					Debug.Log($"HUDReplacer: Found file {relpath}");
 
 					int width = 0;
 					int height = 0;
@@ -269,6 +315,15 @@ namespace HUDReplacer
 						replacements.Add(basename, replacement);
 					}
 
+					// We will never select a replacement with a priority lower
+					// than the highest priority, so don't bother adding it to
+					// the list.
+					if (replacement.replacements.Count != 0)
+					{
+						if (info.priority < replacement.replacements[0].priority)
+							continue;
+					}
+
 					replacement.replacements.Add(info);
 				}
 			}
@@ -292,6 +347,7 @@ namespace HUDReplacer
 			if (!SceneImages.TryGetValue(HighLogic.LoadedScene, out var sceneImages))
 				sceneImages = Empty;
 
+			var basePath = KSPUtil.ApplicationRootPath;
 			foreach (Texture2D tex in tex_array)
 			{
 				string name = tex.name;
@@ -306,6 +362,15 @@ namespace HUDReplacer
 				var replacement = GetMatchingReplacement(info, sceneInfo, tex);
 				if (replacement is null)
 					continue;
+
+				if (SettingsManager.Instance.showDebugToolbar)
+				{
+					var path = replacement.path;
+					if (path.StartsWith(basePath))
+						path = path.Substring(basePath.Length);
+
+					Debug.Log($"HUDReplacer: Replacing texture {name} with {path}");
+				}
 
 				// Special handling for the mouse cursor
 				int cidx = CursorNames.IndexOf(name);
